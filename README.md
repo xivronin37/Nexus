@@ -9,7 +9,7 @@ Player 2 starts with 5 stones and 4 sticks.
 > [NOTE] Forming a chain grants **BOTH.**
 
 ## The Chain Rule and Scoring
-**Definition:** A contiguous group of 4+ stones connected by sticks.
+**Definition:** A contiguous group of 4+ stones connected by sticks.  
 **Scoring:** Creating a chain grants a bonus point for every additional stone that extends it.
 
 ## The Adjacency Rule and Volatility
