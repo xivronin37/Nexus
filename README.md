@@ -20,7 +20,7 @@ A stone's state shifts based on the number of connected sticks (can be done by o
 **4 Sticks:** Dead (The stone and its direct connections are permanently removed from the board).  
 
 ## Win Conditions
-1. **Mercy Rule:** A player wins instantly if their opponent's total points fall below half of their own.
+1. **Mercy Rule:** A player wins instantly if they have more than 30 points and their opponent's total points fall below half of their own.
 2. **Surrender:** A player wins if their opponent has no legal moves to make.
 3. **Resignation:** A player wins if their opponent resigns the game.
 
