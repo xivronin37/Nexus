@@ -12,6 +12,14 @@ struct Move {
     bool orientH;
     MoveType type;
     int stoneChoices;
+    bool operator==(const Move& other) const {
+        return isPlayerOne == other.isPlayerOne &&
+               row == other.row &&
+               col == other.col &&
+               orientH == other.orientH &&
+               type == other.type &&
+               stoneChoices == other.stoneChoices;
+    }
 };
 
 class Mover {
@@ -25,4 +33,5 @@ class Mover {
         int decode(const StickRef& ref, int r, int c) const;
         int score(const Board& board, const Move& move);
         std::vector<int> stoneNeighbors(const Board& board, int row, int col) const;
+        int isGameOver(const Board& board);
 };

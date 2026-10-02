@@ -179,7 +179,7 @@ std::vector<Move> Mover::genMoves(const Board& board, bool isPlayerOne) {
 
         for (int j = 0; j <= hS; j++) {
             Move branch = hStick;
-            branch.stoneChoices = i;
+            branch.stoneChoices = j;
             if (isLegal(board, branch)) gen.push_back(branch);
         }
 
@@ -386,4 +386,18 @@ int Mover::score(const Board& board, const Move& move) {
     }
 
     return totalScore;
+}
+
+int Mover::isGameOver(const Board& board) {
+    if (board.ptsOne > 30 && (board.ptsOne / 2) > board.ptsTwo) {
+        return 1;
+    } else if (board.ptsTwo > 30 && (board.ptsTwo / 2) > board.ptsOne) {
+        return 2;
+    }
+
+    if (genMoves(board, board.isPlayerOne).empty()) {
+        return board.isPlayerOne ? 2 : 1;
+    }
+
+    return 0; // Game is not over
 }
