@@ -87,3 +87,7 @@ std::pair<int, int> Board::parseCoord(const std::string& s) {
     rank--;
     return {file, rank};
 }
+
+void Board::reset() {
+    *this = Board{};
+}

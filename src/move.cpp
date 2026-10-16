@@ -1,9 +1,26 @@
 
 #include <iostream>
 #include <deque>
+#include <algorithm>
 
 #include "board.h"
 #include "move.h"
+
+void Mover::removeStone(Board& board, int row, int col) {
+    int idx = stoneIndex(row, col);
+    board.stoneSet.set(idx, false);
+    board.stoneOwner.set(idx, false);
+    std::vector<StickRef> ref = board.findConnections(row, col);
+    for (StickRef r : ref) {
+        if (r.isH) {
+            board.hStickSet.set(r.index, false);
+            board.hStickOwner.set(r.index, false);
+        } else {
+            board.vStickSet.set(r.index, false);
+            board.vStickOwner.set(r.index, false);
+        }
+    }
+}
 
 void Mover::applyMove(Board& board, Move& move) {
     switch(move.type) {
@@ -21,6 +38,15 @@ void Mover::applyMove(Board& board, Move& move) {
             pts += total;
             stones += move.stoneChoices;
             sticks += (connect - move.stoneChoices);
+
+            if (board.degree(move.row, move.col) == 4) { // dead stone
+                removeStone(board, move.row, move.col);
+            }
+
+            /* DEBUG std::cout << "STONE applyMove | isPlayerOne=" << move.isPlayerOne
+              << " row=" << move.row << " col=" << move.col
+              << " stoneChoices=" << move.stoneChoices << "\n"; */
+
             board.isPlayerOne = !board.isPlayerOne;
             break;
             }
@@ -39,6 +65,20 @@ void Mover::applyMove(Board& board, Move& move) {
                 pts += total;
                 stones += move.stoneChoices;
                 sticks += (connect - move.stoneChoices);
+
+                if (board.degree(move.row, move.col) == 4) {
+                    int idx = stoneIndex(move.row, move.col);
+                    if (board.stoneSet.test(idx)) {
+                        removeStone(board, move.row, move.col);
+                    }
+                }
+                if (board.degree(move.row, move.col + 1) == 4) {
+                    int idx = stoneIndex(move.row, move.col + 1);
+                    if (board.stoneSet.test(idx)) {
+                        removeStone(board, move.row, move.col + 1);
+                    }
+                }
+
                 board.isPlayerOne = !board.isPlayerOne;
                 break;
             } else {
@@ -54,6 +94,20 @@ void Mover::applyMove(Board& board, Move& move) {
                 pts += total;
                 stones += move.stoneChoices;
                 sticks += (connect - move.stoneChoices);
+
+                if (board.degree(move.row, move.col) == 4) {
+                    int idx = stoneIndex(move.row, move.col);
+                    if (board.stoneSet.test(idx)) {
+                        removeStone(board, move.row, move.col);
+                    }
+                } 
+                if (board.degree(move.row + 1, move.col) == 4) {
+                    int idx = stoneIndex(move.row + 1, move.col);
+                    if (board.stoneSet.test(idx)) {
+                        removeStone(board, move.row + 1, move.col);
+                    }
+                }
+
                 board.isPlayerOne = !board.isPlayerOne;
                 break;
             }
@@ -65,7 +119,38 @@ void Mover::applyMove(Board& board, Move& move) {
             for (StickRef r : ref) {
                 r.isH ? board.hStickOwner.flip(r.index) : board.vStickOwner.flip(r.index);
             }
+            if (board.lastFlippedIdx == index && board.lastFlippedIsOne != move.isPlayerOne) {
+                int& pts = move.isPlayerOne ? board.ptsOne : board.ptsTwo;
+                if (pts == 0) {
+                    int& stones = move.isPlayerOne ? board.stonesOne : board.stonesTwo;
+                    int& sticks = move.isPlayerOne ? board.sticksOne : board.sticksTwo;
+                    if (stones > sticks) {
+                        stones--;
+                        stones = std::max(0, stones);
+                    } else if (sticks < stones) {
+                        sticks--;
+                        sticks = std::max(0, sticks);
+                    } else {
+                        stones--;
+                        sticks--;
+                        stones = std::max(0, stones);
+                        sticks = std::max(0, sticks);
+                    }
+                } else {
+                    pts -= 6;
+                    if (pts < 0) pts = 0;
+                }
+            }
+
+            board.lastFlippedIdx = index;
+            board.lastFlippedIsOne = move.isPlayerOne;
             board.isPlayerOne = !board.isPlayerOne;
+
+            board.recentlyFlipped.push_back(index);
+            if (board.recentlyFlipped.size() > 6) {
+                board.recentlyFlipped.erase(board.recentlyFlipped.begin());
+            }
+
             break;
         }
     }
@@ -76,11 +161,11 @@ bool Mover::isLegal(const Board& board, const Move& move) {
         default: return false;
         case MoveType::Stone:{
             if (move.isPlayerOne) {
-                if (board.stonesOne == 0) {
+                if (board.stonesOne <= 0) {
                     return false;
                 }
             } else {
-                if (board.stonesTwo == 0) {
+                if (board.stonesTwo <= 0) {
                         return false;
                     }
             }
@@ -97,11 +182,11 @@ bool Mover::isLegal(const Board& board, const Move& move) {
         }
         case MoveType::Stick: {
             if (move.isPlayerOne) {
-                if (board.sticksOne == 0) {
+                if (board.sticksOne <= 0) {
                     return false;
                 }
             } else {
-                if (board.sticksTwo == 0) {
+                if (board.sticksTwo <= 0) {
                         return false;
                     }
             }
@@ -134,6 +219,11 @@ bool Mover::isLegal(const Board& board, const Move& move) {
         case MoveType::Flip: {
             int index = stoneIndex(move.row, move.col);
             bool exists;
+            auto it = std::find(board.recentlyFlipped.begin(), board.recentlyFlipped.end(), index);
+            if (it != board.recentlyFlipped.end()) {
+                return false;
+            }
+
             if ((0 <= move.row && move.row <= 11) && (0 <= move.col && move.col <= 11)) {
                 exists = board.stoneSet.test(index);
             } else {
@@ -188,6 +278,46 @@ std::vector<Move> Mover::genMoves(const Board& board, bool isPlayerOne) {
             branch.stoneChoices = j;
             if (isLegal(board, branch)) gen.push_back(branch);
         }
+    }
+
+    return gen;
+}
+
+std::vector<Move> Mover::genMovesSearch(const Board& board, bool isPlayerOne) {
+    std::vector<Move> gen;
+    gen.reserve(200);
+    for (int i = 0; i < 144; i++) {
+        int row = i / 12;
+        int col = i % 12;
+        
+        Move stone{isPlayerOne, row, col, false, MoveType::Stone};
+        Move flip{isPlayerOne, row, col, false,  MoveType::Flip};
+        Move hStick{isPlayerOne, row, col, true, MoveType::Stick};
+        Move vStick{isPlayerOne, row, col, false, MoveType::Stick};
+
+        int s = completeConnection(board, stone);
+        int hS = completeConnection(board, hStick);
+        int vS = completeConnection(board, vStick);
+
+       bool wantStones = isPlayerOne
+                ? (board.sticksOne > board.stonesOne)   // sticks plentiful, stones scarce → take stones
+                : (board.sticksTwo > board.stonesTwo);
+        if (s > 0) {
+            stone.stoneChoices = wantStones ? s : 0;
+        }
+
+        if (hS > 0) {
+            hStick.stoneChoices = wantStones ? hS : 0;
+        }
+
+        if (vS > 0) {
+            vStick.stoneChoices = wantStones ? vS : 0;
+        }
+
+        if (isLegal(board, stone)) gen.push_back(stone);
+        if (isLegal(board, flip)) gen.push_back(flip);
+        if (isLegal(board, hStick)) gen.push_back(hStick);
+        if (isLegal(board, vStick)) gen.push_back(vStick);
     }
 
     return gen;

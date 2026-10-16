@@ -12,6 +12,7 @@ struct Move {
     bool orientH;
     MoveType type;
     int stoneChoices;
+
     bool operator==(const Move& other) const {
         return isPlayerOne == other.isPlayerOne &&
                row == other.row &&
@@ -27,6 +28,7 @@ class Mover {
         void applyMove(Board& board, Move& move);
         bool isLegal(const Board& board, const Move& move);
         std::vector<Move> genMoves(const Board& board, bool isPlayerOne);
+        std::vector<Move> genMovesSearch(const Board& board, bool isPlayerOne);
         uint64_t perft(const Board& board, int depth, bool isPlayerOne);
         int completeConnection(const Board& board, const Move& move);
         int floodFill(const Board& board, int r, int c);
@@ -34,4 +36,5 @@ class Mover {
         int score(const Board& board, const Move& move);
         std::vector<int> stoneNeighbors(const Board& board, int row, int col) const;
         int isGameOver(const Board& board);
+        void removeStone(Board& board, int row, int col);
 };

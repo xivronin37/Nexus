@@ -1,11 +1,15 @@
 
 #include <iostream>
+#include <iomanip>
 #include <sstream>
+#include <chrono>
+#include <map>
 
 #include "ncp.h"
+#include "ai/infer.h"
 
 void NCP::runNCP() {
-     while (true) {
+    while (true) {
         std::string line;
         std::getline(std::cin, line);
 
@@ -14,22 +18,85 @@ void NCP::runNCP() {
         ss >> command;
 
         if (command == "ncp") {
-            std::cout << "name Nexus 1.0" << "\n" << std::flush;
+            std::cout << "name Arcturus 2.0" << "\n" << std::flush;
             std::cout << "author MC" << "\n" << std::flush;
             std::cout << "ncpok" << "\n" << std::flush;
         } else if (command == "go") {
-            // engine not implemented yet
+            int iterations = 1000; // default
+            double temperature = 1.0; // default
+            bool isStochastic = false;
+            bool includeVisitDistribution = false;
+            std::string token;
+
+            if (ss >> token) {
+                try {
+                    iterations = std::stoi(token);
+                } catch (...) {
+                    // malformed, just keep default
+                }
+            }
+            if (ss >> token) {
+                try {
+                    temperature = std::stod(token);
+                    isStochastic = true;
+                } catch (...) {
+                    includeVisitDistribution = token == "visits";
+                }
+            }
+            if (ss >> token) {
+                includeVisitDistribution = token == "visits";
+            }
+            
+            Move move;
+            PolicySearchResult searchResult;
+
+            if (includeVisitDistribution) {
+                searchResult = ai.findBestMoveWithVisitDistribution(
+                    start, iterations, isStochastic ? temperature : 1.0);
+                move = searchResult.move;
+            } else if (isStochastic) {
+                move = ai.stochasticFindBestMove(start, iterations, temperature);
+            } else {
+                move = ai.findBestMove(start, iterations);
+            }
+
+            mover.applyMove(start, move);
+            std::cout << "moveok\n" << std::flush;
+            std::string bestMove = "Move";
+            if (move.type == MoveType::Stone) {
+                bestMove += " stone ";
+                bestMove += std::string(1, 'a' + move.col) + std::to_string(move.row + 1);
+            } else if (move.type == MoveType::Stick) {
+                bestMove += " stick ";
+                bestMove += std::string(1, 'a' + move.col) + std::to_string(move.row + 1);
+                bestMove += " ";
+                if (move.orientH) {
+                    bestMove += std::string(1, 'a' + move.col + 1) + std::to_string(move.row + 1);
+                } else {
+                    bestMove += std::string(1, 'a' + move.col) + std::to_string(move.row + 2);
+                }
+            } else if (move.type == MoveType::Flip) {
+                bestMove += " flip ";
+                bestMove += std::string(1, 'a' + move.col) + std::to_string(move.row + 1);
+            }
+
+            bestMove += " " + std::to_string(move.stoneChoices);
+            std::cout << bestMove << "\n" << std::flush;
+            if (includeVisitDistribution) {
+                std::cout << "visits" << std::setprecision(17);
+                for (const auto& [action, probability] : searchResult.visitDistribution) {
+                    std::cout << " " << action << ":" << probability;
+                }
+                std::cout << "\n" << std::flush;
+            }
+
         } else if (command == "halt") {
             // engine not implemented yet
         } else if (command == "stop") {
             break;
         } else if (command == "pos") {
-            std::string token;
-            if (ss >> token && token == "play") {
-                /* while (ss >> token) {
-                    
-                } */
-            }
+            start.reset();
+            std::cout << "posok" << std::endl;
         } else if (command == "move") {
             std::string token, one;
             ss >> token;
@@ -64,11 +131,9 @@ void NCP::runNCP() {
 
             } else if (token == "stick") {
                 ss >> token;
-                int idx = token.find('-');
-                std::string first = token.substr(0, idx);
-                std::string second = token.substr(idx + 1);
-                std::pair<int, int> coordOne = start.parseCoord(first);
-                std::pair<int, int> coordTwo = start.parseCoord(second);
+                std::pair<int, int> coordOne = start.parseCoord(token);
+                ss >> token;
+                std::pair<int, int> coordTwo = start.parseCoord(token);
                 
 
                 int bonus = 0;
@@ -107,6 +172,125 @@ void NCP::runNCP() {
                     std::cout << "illegalMove\n" << std::flush;
                 }
             } 
+        } else if (command == "export") {
+            std::string stones = start.stoneSet.to_string();
+            std::string stoneOwner = start.stoneOwner.to_string();
+            std::string hSticks = start.hStickSet.to_string();
+            std::string hStickOwner = start.hStickOwner.to_string();
+            std::string vSticks = start.vStickSet.to_string();
+            std::string vStickOwner = start.vStickOwner.to_string();
+            std::cout << stones << ' '
+                      << stoneOwner << ' '
+                      << hSticks << ' '
+                      << hStickOwner << ' '
+                      << vSticks << ' '
+                      << vStickOwner << ' '
+                      << (start.isPlayerOne ? 1 : 0) << ' '
+                      << start.stonesOne << ' '
+                      << start.sticksOne << ' '
+                      << start.ptsOne << ' '
+                      << start.stonesTwo << ' '
+                      << start.sticksTwo << ' '
+                      << start.ptsTwo;
+            for (std::size_t i = 0; i < 6; ++i) {
+                const int flippedIndex =
+                    i < start.recentlyFlipped.size()
+                        ? start.recentlyFlipped[i]
+                        : -1;
+                std::cout << ' ' << flippedIndex;
+            }
+            std::cout << '\n' << std::flush;
+            // warning: reversed bit mapping, so 143 would map to 0 index here.
+        } else if (command == "status") {
+            std::cout << mover.isGameOver(start) << std::endl;
+        } else if (command == "eval") {
+            Board copy = start;
+            if (mover.isGameOver(copy) != 0) {
+                std::cout << "null" << std::endl;
+            } else {
+                double score = ai.evaluate(copy);
+                std::cout << score << std::endl;
+            }
+        } else if (command == "priors") {
+            Board copy = start;
+            std::vector<Move> legalMoves = mover.genMoves(copy, copy.isPlayerOne);
+            if (legalMoves.empty()) {
+                std::cout << "empty" << std::endl;
+            } else {
+                std::vector<Board> successorBoards;
+
+                for (Move m : legalMoves) {
+                    Board nextBoard = copy;
+                    mover.applyMove(nextBoard, m);
+                    successorBoards.push_back(nextBoard);
+                }
+                std::vector<float> scores = ai.evaluator->predictBatch(successorBoards);
+                std::map<std::size_t, double> scoresMap;
+
+                for (int i = 0; i < legalMoves.size(); i++) {
+                    std::size_t idx = policyActionIndex(legalMoves[i]);
+                    double current = -scores[i];
+                    auto it = scoresMap.find(idx);
+
+                    if (it == scoresMap.end()) {
+                        scoresMap[idx] = current;
+                    } else {
+                        if (it->second <= current) {
+                            it->second = current;
+                        }
+                    }
+                }
+
+                std::cout << "scores " << std::setprecision(17);
+
+                for (const auto& [key, value] : scoresMap) {
+                    std::cout << key << ":" << value << " ";
+                }
+                std::cout << std::endl;
+            }
+        } else if (command == "random") {
+            std::string token;
+
+            if (ss >> token) {
+                std::vector<Move> legalMoves = mover.genMoves(start, start.isPlayerOne);
+                try {
+                    size_t idx = std::stoi(token) % legalMoves.size();
+                    Move move = legalMoves[idx];
+
+                    if (legalMoves.empty()) {
+                        std::cout << "No legal moves available in this state.\n" << std::flush;
+                        continue; 
+                    }
+
+                    mover.applyMove(start, move);
+                    std::cout << "moveok\n" << std::flush;
+                    std::string bestMove = "Move";
+                    if (move.type == MoveType::Stone) {
+                        bestMove += " stone ";
+                        bestMove += std::string(1, 'a' + move.col) + std::to_string(move.row + 1);
+                    } else if (move.type == MoveType::Stick) {
+                        bestMove += " stick ";
+                        bestMove += std::string(1, 'a' + move.col) + std::to_string(move.row + 1);
+                        bestMove += " ";
+                        if (move.orientH) {
+                            bestMove += std::string(1, 'a' + move.col + 1) + std::to_string(move.row + 1);
+                        } else {
+                            bestMove += std::string(1, 'a' + move.col) + std::to_string(move.row + 2);
+                        }
+                    } else if (move.type == MoveType::Flip) {
+                        bestMove += " flip ";
+                        bestMove += std::string(1, 'a' + move.col) + std::to_string(move.row + 1);
+                    }
+
+                    bestMove += " " + std::to_string(move.stoneChoices);
+                    std::cout << bestMove << "\n" << std::flush;
+                } catch (...) {
+                    std::cout << "Error in string-to-integer conversion." << std::endl;
+                }
+
+            } else {
+                std::cout << "No seed provided." << std::endl;
+            }
         }
     }
 }

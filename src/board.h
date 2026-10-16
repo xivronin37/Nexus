@@ -19,12 +19,16 @@ class Board {
         std::bitset<144> stoneSet{}, stoneOwner{};
         std::bitset<132> hStickSet{}, vStickSet{}, hStickOwner{}, vStickOwner{};
         int stonesOne = 5;
-        int sticksOne = 3;
+        int sticksOne = 4;
         int stonesTwo = 5;
         int sticksTwo = 4;
         int ptsOne = 0;
         int ptsTwo = 0;
+        int lastFlippedIdx = -1;
+        bool lastFlippedIsOne = false;
+        std::vector<int> recentlyFlipped; // window of 6
         int degree(int row, int col) const;
         std::vector<StickRef> findConnections(int row, int col) const;
         std::pair<int, int> parseCoord(const std::string& s);
+        void reset();
 };

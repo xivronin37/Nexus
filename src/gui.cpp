@@ -2,18 +2,27 @@
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_opengl3.h"
+#define MINIAUDIO_IMPLEMENTATION
+#include "miniaudio.h"
 
 #include <cmath>
 #include <random>
 #include <iostream>
 #include <chrono>
+#include <exception>
+#include <memory>
+#include <string>
 
 #include "board.h"
 #include "move.h"
+#include "ai/infer.h"
 #include "ai/mcts.h"
     
 std::random_device rd;
 std::mt19937 gen(rd());
+
+ma_engine engine;
+ma_result result = ma_engine_init(NULL, &engine);
 
 struct GameState {
     Board board;
@@ -22,17 +31,56 @@ struct GameState {
     bool awaitingBonus = false;
     int bonusSliderValue = 0;
     Move pendingMove;
+    std::string bonusError;
     bool stoneMode = true;
     bool stickMode = false;
     int winner = 0;
     double thinkTime = 0.0;
 };
 
-int main() {
+int main(int argc, char* argv[]) {
+    if (argc != 1 && (argc != 3 || std::string(argv[1]) != "--model")) {
+        std::cerr << "Usage: NexusGui [--model <model.onnx>]\n";
+        return 2;
+    }
+
+    std::unique_ptr<InferenceRuntime> runtime;
+    std::unique_ptr<InferenceEngine> evaluator;
+    if (argc == 3) {
+        try {
+            runtime = std::make_unique<InferenceRuntime>();
+            evaluator = std::make_unique<InferenceEngine>();
+            if (!evaluator->load(argv[2], *runtime)) {
+                return 1;
+            }
+        } catch (const std::exception& error) {
+            std::cerr << "Neural model startup failed: "
+                      << error.what() << '\n';
+            return 1;
+        }
+    }
+
+    if (result != MA_SUCCESS) {
+        std::cout << "Failed to initialize audio engine." << std::endl;
+    }
+
+    ma_engine_set_volume(&engine, 0.6f);
+    
     Mover mover;
     MCTS ai;
-    glfwInit();
+    if (evaluator != nullptr) {
+        ai.setEvaluator(evaluator.get());
+    }
+    if (glfwInit() != GLFW_TRUE) {
+        std::cerr << "Failed to initialize GLFW.\n";
+        return 1;
+    }
     GLFWwindow* window = glfwCreateWindow(1280, 720, "Nexus", nullptr, nullptr);
+    if (window == nullptr) {
+        std::cerr << "Failed to create the Nexus window.\n";
+        glfwTerminate();
+        return 1;
+    }
     glfwMakeContextCurrent(window);
 
     IMGUI_CHECKVERSION();
@@ -47,11 +95,13 @@ int main() {
 
     bool stoneMode = true;
     bool stickMode = false;
-    int callCount = 0; 
+    static bool endSoundPlayed = false;
 
     GameState game;
 
     while (!glfwWindowShouldClose(window)) {
+        bool moveApplied = false;
+
         glfwPollEvents();
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplGlfw_NewFrame();
@@ -126,6 +176,9 @@ int main() {
             float intersectY = origin.y + row * cellSize;
 
             ImVec2 intersectPos(intersectX, intersectY);
+            /* if (i == 1) {  // hardcode the specific index you're testing, temporarily
+                std::cout << "Draw loop sees owner=" << game.board.stoneOwner.test(i) << "\n";
+            } */
 
             if (game.board.stoneSet.test(i)) {
                 ImU32 stoneColor = game.board.stoneOwner.test(i) ? IM_COL32(255, 255, 255, 255) : IM_COL32(0, 0, 0, 255);
@@ -141,8 +194,38 @@ int main() {
         int hoveredRow = static_cast<int>(std::round(relativeY / cellSize));
         float offsetX = relativeX - (hoveredCol * cellSize);
         float offsetY = relativeY - (hoveredRow * cellSize);
+        if (game.winner == 0 && !game.awaitingBonus &&
+            hoveredRow >= 0 && hoveredRow < gridSize &&
+            hoveredCol >= 0 && hoveredCol < gridSize) { // flip
+    
+            int idx = stoneIndex(hoveredRow, hoveredCol);
 
-        if (stoneMode && game.winner == 0) {
+            if (game.board.stoneSet.test(idx) && game.board.stoneOwner.test(idx) != game.board.isPlayerOne) {
+                if (game.board.degree(hoveredRow, hoveredCol) == 3) {
+                    float snapX = origin.x + (hoveredCol * cellSize);
+                    float snapY = origin.y + (hoveredRow * cellSize);
+                    ImVec2 snapPos(snapX, snapY);
+
+                    ImU32 previewColor = game.board.isPlayerOne ? IM_COL32(255, 255, 255, 120) : IM_COL32(0, 0, 0, 120); 
+                    drawList->AddCircleFilled(snapPos, cellSize * 0.43f, previewColor);
+
+                    if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !moveApplied) {
+                        Move move{game.board.isPlayerOne, hoveredRow, hoveredCol, false, MoveType::Flip};
+                        if (mover.isLegal(game.board, move)) {
+                            std::cout << "Before: owner=" << game.board.stoneOwner.test(idx) << "\n";
+                            mover.applyMove(game.board, move);
+                            std::cout << "After: owner=" << game.board.stoneOwner.test(idx) << "\n";
+                            game.us = false;
+                            game.aiMoved = false;
+                            ma_engine_play_sound(&engine, "assets/StoneFlip.wav", NULL);
+                            moveApplied = true;
+                        } 
+                    }
+                }
+            }
+        } 
+
+        if (stoneMode && game.winner == 0 && !game.awaitingBonus) {
             if (hoveredRow >= 0 && hoveredRow < gridSize && hoveredCol >= 0 && hoveredCol < gridSize) {
             int stoneIdx = stoneIndex(hoveredRow, hoveredCol);
 
@@ -154,7 +237,7 @@ int main() {
                     ImU32 previewColor = game.board.isPlayerOne ? IM_COL32(255, 255, 255, 120) : IM_COL32(0, 0, 0, 120); 
                     drawList->AddCircleFilled(snapPos, cellSize * 0.42f, previewColor);
 
-                    if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                    if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !moveApplied) {
                         Move move{game.board.isPlayerOne, hoveredRow, hoveredCol, false, MoveType::Stone};
                         if (mover.completeConnection(game.board, move) == 0) {
                             move.stoneChoices = 0;
@@ -162,18 +245,20 @@ int main() {
                                 mover.applyMove(game.board, move);
                                 game.us = false;
                                 game.aiMoved = false;
-                                // sound
+                                ma_engine_play_sound(&engine, "assets/PlaceStone.wav", NULL);
+                                moveApplied = true;
                             }
                         } else {
                             game.pendingMove = move;
                             game.awaitingBonus = true;
+                            game.bonusError.clear();
                         }
                     }
                 }
             }
         }
 
-        if (stickMode && game.winner == 0) {
+        if (stickMode && game.winner == 0 && !game.awaitingBonus) {
             if (hoveredRow >= 0 && hoveredRow < gridSize && hoveredCol >= 0 && hoveredCol < gridSize) {
                 bool leanH = std::abs(offsetX) > std::abs(offsetY);
                 int stickRow = -1;
@@ -210,7 +295,7 @@ int main() {
                             ImU32 previewColor = game.board.isPlayerOne ? IM_COL32(255, 255, 255, 120) : IM_COL32(0, 0, 0, 120); 
                             drawList->AddLine(snapPos, endPos, previewColor, 4.0f);
 
-                            if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                            if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !moveApplied) {
                                 Move move{game.board.isPlayerOne, stickRow, stickCol, true, MoveType::Stick};
                                 if (mover.completeConnection(game.board, move) == 0) {
                                     move.stoneChoices = 0;
@@ -218,11 +303,13 @@ int main() {
                                         mover.applyMove(game.board, move);
                                         game.us = false;
                                         game.aiMoved = false;
-                                        // sound
+                                        ma_engine_play_sound(&engine, "assets/PlaceStick.wav", NULL);
+                                        moveApplied = true;
                                     }
                                 } else {
                                     game.pendingMove = move;
                                     game.awaitingBonus = true;
+                                    game.bonusError.clear();
                                 }
                             }
                         }
@@ -239,7 +326,7 @@ int main() {
                             ImU32 previewColor = game.board.isPlayerOne ? IM_COL32(255, 255, 255, 120) : IM_COL32(0, 0, 0, 120); 
                             drawList->AddLine(snapPos, endPos, previewColor, 4.0f);
 
-                            if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                            if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !moveApplied) {
                                 Move move{game.board.isPlayerOne, stickRow, stickCol, false, MoveType::Stick};
                                 if (mover.completeConnection(game.board, move) == 0) {
                                     move.stoneChoices = 0;
@@ -247,11 +334,13 @@ int main() {
                                         mover.applyMove(game.board, move);
                                         game.us = false;
                                         game.aiMoved = false;
-                                        // sound
+                                        ma_engine_play_sound(&engine, "assets/PlaceStick.wav", NULL);
+                                        moveApplied = true;
                                     }
                                 } else {
                                     game.pendingMove = move;
                                     game.awaitingBonus = true;
+                                    game.bonusError.clear();
                                 }
                             }
                         }   
@@ -262,8 +351,7 @@ int main() {
 
         game.winner = mover.isGameOver(game.board);
         
-        ImGui::Begin("Arcturus 1.0");
-
+        ImGui::Begin("Arcturus 2.0");
         if (!game.us && !game.awaitingBonus && !game.aiMoved && game.winner == 0) {
             ImGui::Text("Arcturus is thinking...");
             auto start = std::chrono::high_resolution_clock::now();
@@ -271,15 +359,24 @@ int main() {
             auto end = std::chrono::high_resolution_clock::now();
             game.thinkTime = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
             mover.applyMove(game.board, bestMove);
+            if (bestMove.type == MoveType::Stone) {
+                ma_engine_play_sound(&engine, "assets/PlaceStone.wav", NULL);
+            } else if (bestMove.type == MoveType::Stick) {
+                ma_engine_play_sound(&engine, "assets/PlaceStick.wav", NULL);
+            } else if (bestMove.type == MoveType::Flip) {
+                ma_engine_play_sound(&engine, "assets/StoneFlip.wav", NULL);
+            }
 
             game.us = true;
             game.aiMoved = true;
         }
 
-        if (game.thinkTime > 0) {
+        if (game.thinkTime > 0 && game.thinkTime < 1000) {
             ImGui::Text("Think Time: %.2f ms",  game.thinkTime);
+        } else if (game.thinkTime >= 1000) {
+            ImGui::Text("Think Time: %.2f s",  game.thinkTime / 1000.0);
         }
-        ImGui::Text("Evaluation: %.2f", ai.evaluate(game.board));
+        ImGui::Text("Eval (player to move): %.2f", ai.evaluate(game.board));
         ImGui::End();
 
         game.winner = mover.isGameOver(game.board);
@@ -287,29 +384,49 @@ int main() {
         if (game.winner != 0) {
             ImGui::Begin("Game Over");
             ImGui::Text("Player %d wins!", game.winner);
+            if (game.winner == 1 && !endSoundPlayed) {
+                ma_engine_play_sound(&engine, "assets/Victory.wav", NULL);
+                endSoundPlayed = true;
+            } else if (game.winner == 2 && !endSoundPlayed) {
+                ma_engine_play_sound(&engine, "assets/Defeat.wav", NULL);
+                endSoundPlayed = true;
+            }
             if (ImGui::Button("Restart")) {
                 game = GameState{};
+                endSoundPlayed = false;
             }
             ImGui::End();
         }
 
         if (game.awaitingBonus) {
-            ImGui::Begin("Bonus");
+            ImGui::SetNextWindowSize(ImVec2(400, 150));
+            ImGui::Begin("Yield");
             int maxBonus = mover.completeConnection(game.board, game.pendingMove);
-            ImGui::SliderInt("Bonus as stones", &game.bonusSliderValue, 0, maxBonus);
-
+            ImGui::SliderInt("How many stones?", &game.bonusSliderValue, 0, maxBonus);
+            ImGui::Text("Sticks: %d", maxBonus - game.bonusSliderValue);
+            if (!game.bonusError.empty()) {
+                ImGui::TextColored(
+                    ImVec4(1.0f, 0.3f, 0.3f, 1.0f),
+                    "%s",
+                    game.bonusError.c_str());
+            }
             if (ImGui::Button("Confirm")) {
                 game.pendingMove.stoneChoices = game.bonusSliderValue;
                 if (mover.isLegal(game.board, game.pendingMove)) {
                     mover.applyMove(game.board, game.pendingMove);
+                    ma_engine_play_sound(&engine, "assets/Bonus.wav", NULL);
+                    game.awaitingBonus = false;
+                    game.bonusSliderValue = 0;
+                    game.bonusError.clear();
+                    game.us = false;
+                    game.aiMoved = false;
+                } else {
+                    game.bonusError = "That move is no longer legal. Cancel and choose another move.";
                 }
-                game.awaitingBonus = false;
-                game.bonusSliderValue = 0;
-                game.us = false;
-                game.aiMoved = false;
             } else if (ImGui::Button("Cancel")) {
                 game.awaitingBonus = false;
                 game.bonusSliderValue = 0;
+                game.bonusError.clear();
             }
             ImGui::End();
         }
